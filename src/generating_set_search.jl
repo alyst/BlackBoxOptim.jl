@@ -101,11 +101,13 @@ function has_converged(gss::GeneratingSetSearcher)
 end
 
 function step!(gss::GeneratingSetSearcher)
+  @assert gss.x ∈ gss.search_space "Solution $(gss.x) is out of search space at step $k"
   if has_converged(gss)
     # Restart from a random point
     gss.x = rand_individual(gss.search_space)
     gss.xfitness = fitness(gss.x, gss.evaluator)
     gss.step_size = calc_initial_step_size(gss.search_space, gss.step_size_factor)
+    @assert isfinite(gss.step_size)
   end
 
   # Get the directions for this iteration
@@ -126,6 +128,7 @@ function step!(gss::GeneratingSetSearcher)
   for direction in order
 
     candidate = gss.x + gss.step_size .* directions[:, direction]
+    @assert all(isfinite, candidate) "non-finite dimensions at $(gss.k): x=$(gss.x) step_size=$(gss.step_size) direction=$direction"
     apply!(gss.embed, candidate, gss.x)
 
     if is_better(candidate, gss.xfitness, gss.evaluator)
@@ -143,5 +146,7 @@ function step!(gss::GeneratingSetSearcher)
     gss.step_size *= gss.step_size_phi
   end
   gss.step_size = min(gss.step_size, gss.step_size_max)
+  @assert isfinite(gss.step_size)
+
   gss
 end
