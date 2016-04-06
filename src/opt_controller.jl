@@ -80,7 +80,8 @@ function make_evaluator(problem::OptimizationProblem, archive=nothing, params::P
     end
     if length(workers) > 0
         if BlackBoxOptim.enable_parallel_methods
-            return ParallelEvaluator(problem, archive, pids=workers)
+            queueCapacity=get(params, :EvaluatorQueueCapacity, length(workers))
+            return ParallelEvaluator(problem, archive, queueCapacity=queueCapacity, pids=workers)
         else
             throw(SystemError("Parallel evaluation disabled"))
         end
