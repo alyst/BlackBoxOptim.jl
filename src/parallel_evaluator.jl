@@ -7,93 +7,106 @@ typealias PESlotChannelRef RemoteRef{PESlotChannel}
 type ParallelEvaluatorWorker{T, P<:OptimizationProblem}
     id::Int
     problem::P
+    param_status::SharedVector{Int}
     shared_param::SharedVector{T}
+    fitness_status::SharedVector{Int}
     shared_fitness::SharedVector{T}
 
     Base.call{T, P<:OptimizationProblem}(::Type{ParallelEvaluatorWorker}, id::Int, problem::P,
-        shared_param::SharedVector{T}, shared_fitness::SharedVector{T}) =
-        new{T,P}(id, problem, shared_param, shared_fitness)
+        param_status::SharedVector{Int}, shared_param::SharedVector{T},
+        fitness_status::SharedVector{Int}, shared_fitness::SharedVector{T}) =
+        new{T,P}(id, problem, param_status, shared_param, fitness_status, shared_fitness)
 end
 
-typealias ParallelEvaluatorWorkerRef{T,P} RemoteRef{Channel{ParallelEvaluatorWorker{T,P}}}
+@inline param_status(worker::ParallelEvaluatorWorker) = worker.param_status[1]
+@inline fitness_status(worker::ParallelEvaluatorWorker) = worker.fitness_status[1]
 
-@inline function Base.call(worker::ParallelEvaluatorWorker)
-    put_fitness!(worker.shared_fitness, fitness(worker.shared_param, worker.problem))
-    return nothing
+# run the wrapper (called in the "main" task)
+function run!(worker::ParallelEvaluatorWorker)
+    while true
+        #info("Checking in worker #$(worker.id)")
+        i = 0
+        while param_status(worker) == 0 || fitness_status(worker) != 0
+            i += 1
+            if i > 1000
+                yield()
+                i = 0
+            end
+        end
+        if param_status(worker) < 0
+            break # error
+        end
+        worker.param_status[1] = 0 # received
+        #info("PE worker #$(worker.id): got job in slot #$(slot_id)")
+        put_fitness!(worker.shared_fitness, fitness(worker.shared_param, worker.problem))
+        worker.fitness_status[1] = 1 # fitness ready
+    end
+    worker.fitness_status[1] = -1 # stopped
 end
 
-@inline Base.call{T,P}(worker_ref::ParallelEvaluatorWorkerRef{T,P}) =
-    (fetch(worker_ref)::ParallelEvaluatorWorker{T,P})()
+# Function that the master process spawns at each worker process.
+# Creates and run the worker wrapper
+function run_parallel_evaluator_worker(id::Int,
+                    worker_ready::RemoteRef{Channel{Int}},
+                    problem::OptimizationProblem,
+                    param_status::SharedVector{Int},
+                    shared_param::SharedVector{Float64},
+                    fitness_status::SharedVector{Int},
+                    shared_fitness::SharedVector{Float64})
+  info("Initializing ParallelEvaluator worker #$id at task=$(myid())")
+  worker = nothing
+  try
+    worker = ParallelEvaluatorWorker(id, problem,
+                param_status, shared_param,
+                fitness_status, shared_fitness)
+  catch e
+    # send -id to notify about an error and to release
+    # the master from waiting for worker readiness
+    info("Exception: $e")
+    put!(worker_ready, -id)
+    rethrow(e)
+  end
+  # create immigrants receiving tasks=#
+  put!(worker_ready, id)
+  info("Running worker #$id")
+  try
+    run!(worker)
+  catch e
+    # send error candidate to notify about an error and to release
+    # the master from waiting for worker messages
+    info("Exception: $e")
+    worker.fitness_status[1] = -2
+    rethrow(e)
+  end
+  info("Worker #$id stopped")
+  nothing
+end
 
 typealias PECandidateDict{FA} Dict{Int, Candidate{FA}}
-
-# HACK to avoid serializing the same remotecall message every time
-# First, the message gets cached
-# Then the same binary blob is being send by `remotecall_fetch_cached`
-# Since remotecall status Remote Ref Id is a part of the message, it also gets reused.
-function remotecall_fetch_msg(w::Base.Worker, f, args...)
-    # can be weak, because the program will have no way to refer to the Ref
-    # itself, it only gets the result.
-    oid = Base.next_rrid_tuple()
-    rv = Base.lookup_ref(oid)
-    rv.waitingfor = w.id
-    Base.CallMsg{:call_fetch}(f, args, oid), oid
-end
-
-function cache_msg(msg)
-    cache=IOBuffer()
-    serialize(cache, msg)
-    takebuf_array(cache)
-end
-
-function send_cached_msg(w::Base.Worker, cached_msg::Vector{UInt8}, now::Bool)
-    Base.check_worker_state(w)
-    io = w.w_stream
-    lock(io.lock)
-    try
-        write(io, cached_msg)
-
-        if !now && w.gcflag
-            Base.flush_gc_msgs(w)
-        else
-            flush(io)
-        end
-    finally
-        unlock(io.lock)
-    end
-end
-
-function remotecall_fetch_cached(w::Base.Worker, cached_msg, cached_oid)
-    # can be weak, because the program will have no way to refer to the Ref
-    # itself, it only gets the result.
-    rv = Base.lookup_ref(cached_oid)
-    rv.waitingfor = w.id
-    send_cached_msg(w, cached_msg, true)
-    v = take!(rv)
-    delete!(Base.PGRP.refs, cached_oid)
-    isa(v, RemoteException) ? throw(v) : v
-end
 
 """
     Fitness evaluator that distributes fitness calculation
     among several worker processes.
+
+    Currently the performance is limited
 """
 type ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archive} <: Evaluator{P}
     problem::P
     archive::A
     num_evals::Int
     last_fitness::F
+    arch_nafitness::FA
 
+    params_status::Vector{SharedVector{Int}}
     shared_params::Vector{SharedVector{T}}
+    fitnesses_status::Vector{SharedVector{Int}}
     shared_fitnesses::Vector{SharedVector{T}}
 
-    worker_onhold::Vector{Base.Semaphore}
-    worker_refs::Vector{ParallelEvaluatorWorkerRef{T,P}}
-    worker_handlers::Vector{Task}
-
     fitness_slots::Base.Semaphore
+    archive_slots::Base.Semaphore
 
     waiting_candidates::PECandidateDict{FA}
+    calculated_fitnesses::Dict{Int, F}
     unclaimed_candidates::PECandidateDict{FA} # done candidates that were not yet checked for completion
 
     worker2job::Vector{Int}
@@ -107,6 +120,10 @@ type ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archive} <: Eval
     is_stopping::Bool
     next_job_id::Int
 
+    worker_refs::Vector{RemoteRef{Channel{Any}}}
+    workers_handler::Task
+    archive_handler::Task
+
     function Base.call{P<:OptimizationProblem, A<:Archive}(::Type{ParallelEvaluator},
         problem::P, archive::A;
         pids::AbstractVector{Int} = workers())
@@ -116,28 +133,29 @@ type ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archive} <: Eval
         T = fitness_eltype(fs)
         FA = archived_fitness_type(archive)
 
-        shared_params = [SharedArray(T, (numdims(problem),), pids=vcat(pid,[myid()])) for pid in pids]
-        shared_fitnesses = [SharedArray(T, (numobjectives(fs),), pids=vcat(pid,[myid()])) for pid in pids]
-        worker_refs = [RemoteRef(function ()
-             # create fake channel and put problem there
-             ch = Channel{ParallelEvaluatorWorker{T,P}}(1)
-             put!(ch, ParallelEvaluatorWorker(i, copy(problem),
-                shared_params[i], shared_fitnesses[i]))
-             ch
-        end, pid) for (i, pid) in enumerate(pids)]
+        param_status = []
 
         etor = new{F, FA, T, typeof(fs), P, A}(
             problem, archive,
-            0, nafitness(fs),
-            shared_params, shared_fitnesses,
-            [Base.Semaphore(0) for _ in pids],
-            worker_refs,
-            [@schedule worker_handler!(etor, Base.worker_from_id(pid), i) for (i, pid) in enumerate(pids)],
-            Base.Semaphore(length(pids)),
-            PECandidateDict{FA}(), PECandidateDict{FA}(),
+            0, nafitness(fs), nafitness(FA),
+            [fill!(SharedArray(Int, (2,), pids=vcat(pid,[myid()])), 0) for pid in pids],
+            [SharedArray(T, (numdims(problem),), pids=vcat(pid,[myid()])) for pid in pids],
+            [fill!(SharedArray(Int, (2,), pids=vcat(pid,[myid()])), 0) for pid in pids],
+            [SharedArray(T, (numobjectives(fs),), pids=vcat(pid,[myid()])) for pid in pids],
+            Base.Semaphore(length(pids)), Base.Semaphore(length(pids)),
+            PECandidateDict{FA}(), Dict{Int, F}(), PECandidateDict{FA}(),
             zeros(length(pids)), ReentrantLock(), 0, 0, IntSet(),
             false, 1
         )
+        etor.worker_refs = _create_workers(etor, pids)
+        etor.workers_handler = @schedule workers_handler!(etor)
+
+        if isa(archive, EpsBoxArchive)
+            info("Initializing archive handler")
+            etor.archive_handler = @schedule archive_handler!(etor)
+        else
+            etor.archive_handler = Task(()->nothing) # no task
+        end
 
         #finalizer(etor, _shutdown!)
 
@@ -171,11 +189,46 @@ is_stopping(etor::ParallelEvaluator) = etor.is_stopping
 # it would be thrown into the main thread
 function check_worker_running{T}(worker::RemoteRef{T})
     if isready(worker)
-        fetch(worker) # fetch the worker, this should trigger an exception
+        worker_res = fetch(worker) # fetch the worker, this should trigger an exception
         # no exception, but the worker should not be ready
-        error("Worker #? has finished before the master shutdown")
+        error("Worker at pid=$(worker.where) has finished before the master shutdown: $worker_res")
     end
     return true
+end
+
+function _create_workers(etor::ParallelEvaluator, pids::AbstractVector{Int})
+    info("Initializing parallel workers...")
+    workers_ready = RemoteRef(() -> Channel{Int}(length(pids))) # FIXME do we need to wait for the worker?
+
+    # spawn workers
+    problem = etor.problem
+    params_status = etor.params_status
+    shared_params = etor.shared_params
+    fitnesses_status = etor.fitnesses_status
+    shared_fitnesses = etor.shared_fitnesses
+
+    worker_refs = RemoteRef{Channel{Any}}[@spawnat(pid, run_parallel_evaluator_worker(i,
+                       workers_ready, problem,
+                       params_status[i], shared_params[i],
+                       fitnesses_status[i], shared_fitnesses[i])) for (i, pid) in enumerate(pids)]
+    #@assert !isready(ppopt.is_started)
+    # wait until all the workers are started
+    info("Waiting for the workers to be ready...")
+    # FIXME is it required?
+    nready = 0
+    while nready < length(pids)
+        map(check_worker_running, worker_refs)
+        worker_id = take!(workers_ready)
+        if worker_id < 0
+            # worker failed to initialize, reading its task would throw an exception
+            check_worker_running(worker_refs[-worker_id])
+            error("Exception in the worker #$(-worker_id), but all workers still running")
+        end
+        info("  Worker #$worker_id is ready")
+        nready += 1
+    end
+    info("All workers ready")
+    return worker_refs
 end
 
 function shutdown!(etor::ParallelEvaluator)
@@ -185,13 +238,11 @@ function shutdown!(etor::ParallelEvaluator)
     end
     etor.is_stopping = true
     # notify the workers that they should shutdown (each worker should pick exactly one message)
-    for i in 1:nworkers(etor)
-        put!(etor.out_params[i], -1)
-        close(etor.out_params[i])
-    end
-    close(etor.in_fitnesses)
-    notify(etor.fitness_slots.cond_wait) # release any waiting tasks
     _shutdown!(etor)
+    # release any waiting tasks
+    notify(etor.fitness_slots.cond_wait)
+    notify(etor.archive_slots.cond_wait)
+    notify(etor.job_assignment.cond_wait)
 end
 
 function _shutdown!(etor::ParallelEvaluator)
@@ -200,6 +251,9 @@ function _shutdown!(etor::ParallelEvaluator)
         etor.is_stopping = true
         #close(etor.in_fitnesses)
         #close(etor.out_individuals)
+    end
+    for i in 1:nworkers(etor)
+        etor.params_status[i][1] = -1
     end
     etor
 end
@@ -222,55 +276,104 @@ function update_done_jobs!(etor::ParallelEvaluator, job_id)
 end
 
 function process_fitness{F}(etor::ParallelEvaluator{F}, worker_ix::Int)
-    lock(etor.job_assignment)
-    job_id = etor.worker2job[worker_ix]
-    new_fitness = get_fitness(F, etor.shared_fitnesses[worker_ix])
-    @assert job_id > 0
+    update_archive!(etor, job_id, new_fitness)
+end
 
-    #info("worker_handler!($worker_ix): got fitness for job #$job_id")
-    candi = pop!(etor.waiting_candidates, job_id)
-    etor.worker2job[worker_ix] = 0 # clear job state
-    etor.num_evals += 1
+function update_archive!{F, FA, T, FS, P<:OptimizationProblem, A<:Archive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
     # update the list of done jobs
+    info("update_archive()")
+    candi = pop!(etor.waiting_candidates, job_id)
     etor.unclaimed_candidates[job_id] = candi
     if length(etor.unclaimed_candidates) > 1000_000 # sanity check
-        throw(InternalError("Too many unclaimed candidates with evaluated fitness"))
+        error("Too many unclaimed candidates with evaluated fitness")
     end
     update_done_jobs!(etor, job_id)
-    unlock(etor.job_assignment)
-    Base.release(etor.fitness_slots)
-
-    etor.last_fitness = candi.fitness = archived_fitness(new_fitness, etor.archive)
+    etor.last_fitness = candi.fitness = archived_fitness(fness, etor.archive)
+    etor.num_evals += 1
+    info("update_archive(): add_candidate()")
     add_candidate!(etor.archive, candi.fitness, candi.params, candi.tag, etor.num_evals)
+    nothing
+end
+
+# default Archive case
+function initiate_archive_update!{F, FA, T, FS, P<:OptimizationProblem, A<:Archive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
+    Base.acquire(etor.archive_slots)
+    update_archive!(etor, job_id, fness)
+    Base.release(etor.archive_slots)
+    nothing
+end
+
+# EpsBoxArchive case, schedule an update
+function initiate_archive_update!{F, FA, T, FS, P<:OptimizationProblem, A<:EpsBoxArchive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
+    info("initiate_archive_update() for job #$job_id")
+    Base.acquire(etor.archive_slots)
+    etor.calculated_fitnesses[job_id] = fness # save fitness to process later
+    nothing
+end
+
+# fitness indexing and archive update task
+# used if archive update is an expensive operation (e.g EpsBoxArchive)
+function archive_handler!(etor::ParallelEvaluator)
+    info("archive_handler!() started")
+    while !is_stopping(etor)
+        if isempty(etor.calculated_fitnesses)
+            # wait for the new archvied fitness
+            info("archive_handler!(): waiting for fitness...")
+            Base.wait(etor.job_assignment.cond_wait)
+        else
+            # process the first fitness in the dictionary
+            job_id, fness = next(etor.calculated_fitnesses, start(etor.calculated_fitnesses))[1]
+            info("archive_handler!(): for fitness for job #$(job_id)...")
+            delete!(etor.calculated_fitnesses, job_id)
+            update_archive!(etor, job_id, fness)
+            info("archive_handler!(): release archive slot")
+            Base.release(etor.archive_slots)
+            yield()
+        end
+        if is_stopping(etor)
+            break
+        end
+    end
 end
 
 """
     Process all incoming "fitness ready" messages until the evaluator is stopped.
 """
-function worker_handler!(etor::ParallelEvaluator, proc::Base.Worker, worker_ix::Int)
-    #info("worker_handler($worker_ix): starting")
-    worker_ref = etor.worker_refs[worker_ix]
-    ping_msg, ping_oid = remotecall_fetch_msg(proc, Base.call, worker_ref)
-    cached_ping_msg = cache_msg(ping_msg)
-
+function workers_handler!{F}(etor::ParallelEvaluator{F})
+    info("workers_handler!() started")
     while !is_stopping(etor)
-        #info("worker_handler!($worker_ix): waiting....")
-        Base.acquire(etor.worker_onhold[worker_ix])
-        remotecall_fetch_cached(proc, cached_ping_msg, ping_oid)
-        process_fitness(etor, worker_ix)
-        #info("worker_handler!($worker_ix): notify job #$job_id done....")
-    end
-end
+        # master critical section
+        for worker_ix in 1:nworkers(etor)
+            info("workers_handler!(): checking worker #$worker_ix...")
+            #@assert check_worker_running(etor.worker_refs[worker_ix])
+            if etor.worker2job[worker_ix] > 0 && etor.fitnesses_status[worker_ix][1] != 0 && etor.params_status[worker_ix][1] == 0
+                if etor.fitnesses_status[worker_ix][1] < 0
+                    error("Worker $worker_ix bad status: $(etor.fitnesses_status[worker_ix][1])")
+                end
 
-function worker_handler!(etor::ParallelEvaluator, proc::LocalProcess, worker_ix::Int)
-    #info("worker_handler($worker_ix): starting")
-    worker_ref = etor.worker_refs[worker_ix]
-    while !is_stopping(etor)
-        #info("worker_handler!($worker_ix): waiting....")
-        Base.acquire(etor.worker_onhold[worker_ix])
-        remotecall_fetch(proc, Base.call, worker_ref)
-        process_fitness(etor, worker_ix)
-        #info("worker_handler!($worker_ix): notify job #$job_id done....")
+                info("worker_handler!(): fitness_evaluated")
+
+                lock(etor.job_assignment)
+                job_id = etor.worker2job[worker_ix]
+                new_fitness = get_fitness(F, etor.shared_fitnesses[worker_ix])
+                @assert job_id > 0
+
+                info("worker_handler!($worker_ix): got fitness for job #$job_id")
+                etor.worker2job[worker_ix] = 0 # clear job state
+
+                etor.fitnesses_status[worker_ix][1] = 0 # received
+                unlock(etor.job_assignment)
+                Base.release(etor.fitness_slots)
+
+                initiate_archive_update!(etor, job_id, new_fitness)
+                #info("workers_handler!(): yield to other tasks after archive update")
+                #yield() # free slots available, switch to the main task
+            end
+        end
+        if length(etor.waiting_candidates)-length(etor.calculated_fitnesses) < nworkers(etor)
+            info("workers_handler!(): yield to other tasks")
+            yield() # free slots available, switch to the main task
+        end
     end
 end
 
@@ -283,15 +386,15 @@ end
             id of fitness evaluation job (check status using `isready()`)
 """
 function async_update_fitness{F,FA}(etor::ParallelEvaluator{F,FA}, candi::Candidate{FA}; force::Bool=false, wait::Bool=false)
-    #info("async_update_fitness(): starting to assign job #$(etor.next_job_id)")
+    info("async_update_fitness(): starting to assign job #$(etor.next_job_id)")
     if force || isnafitness(fitness(candi), fitness_scheme(etor.archive))
-        if length(etor.waiting_candidates) >= queue_capacity(etor) && !wait
-            #info("async_update_fitness(): queue is full, skip")
+        if length(etor.waiting_candidates) - length(etor.calculated_fitnesses) >= queue_capacity(etor) && !wait
+            info("async_update_fitness(): queue is full, skip")
             return 0
         end
-        #info("async_update_fitness(): waiting to assign job #$(etor.next_job_id)")
+        info("async_update_fitness(): waiting to assign job #$(etor.next_job_id)")
         Base.acquire(etor.fitness_slots)
-        #info("async_update_fitness(): initial slot_state: $(etor.worker2job), $(etor.fitness_slots.curr_cnt)")
+        info("async_update_fitness(): initial slot_state: $(etor.worker2job), $(etor.fitness_slots.curr_cnt)")
         lock(etor.job_assignment)
         worker_ix = findfirst(etor.worker2job, 0)
         if worker_ix == 0
@@ -300,12 +403,18 @@ function async_update_fitness{F,FA}(etor::ParallelEvaluator{F,FA}, candi::Candid
         etor.worker2job[worker_ix] = job_id = etor.next_job_id
         etor.next_job_id += 1
         copy!(etor.shared_params[worker_ix], candi.params) # share candidate with the workers
-        #info("async_update_fitness(): assigning job #$job_id to worker #$worker_ix")
+        info("async_update_fitness(): assigning job #$job_id to worker #$worker_ix")
         etor.waiting_candidates[job_id] = candi
-        unlock(etor.job_assignment)
+        #info("async_update_fitness(): assert fitness status")
+        #@assert etor.fitnesses_status[worker_ix][1] == 0
+        #@assert etor.params_status[worker_ix][1] == 0
+        #info("async_update_fitness(): flip param status")
+        etor.params_status[worker_ix][1] = 1 # ready
         #info("async_update_fitness(): assigned job #$job_id to worker #$worker_ix")
-        Base.release(etor.worker_onhold[worker_ix])
-        yield() # dispatch the job ASAP
+        #info("async_update_fitness(): unlock job assignment")
+        unlock(etor.job_assignment)
+        #info("async_update_fitness(): yield()")
+        #yield() # dispatch the job ASAP
         return job_id
     else
         return -1
@@ -321,7 +430,7 @@ end
 function Base.isready{F,FA}(etor::ParallelEvaluator{F,FA}, fit_job_id::Int)
     fit_job_id > 0 || throw(ArgumentError("Incompatible fitness job Id"))
     pop!(etor.unclaimed_candidates, fit_job_id,
-         Candidate{FA}(Individual(), -1, nafitness(fitness_scheme(etor.archive)))) # job was claimed
+         Candidate{FA}(Individual(), -1, etor.arch_nafitness)) # job was claimed
     return fit_job_id <= etor.max_seq_done_job || in(fit_job_id, etor.done_jobs)
 end
 
@@ -383,19 +492,22 @@ end
 
     Wait until any queued fitness evaluation is complete.
 """
-Base.wait(etor::ParallelEvaluator) = wait(etor.fitness_slots.cond_wait)
+Base.wait(etor::ParallelEvaluator) = wait(etor.archive_slots.cond_wait)
+
+isasynchronous(etor::ParallelEvaluator) = isempty(etor.archive_slots.cond_wait.waitq)
 
 # FIXME it's not efficient to calculate fitness like that with `ParallelEvaluator`
 function fitness{F,FA}(params::Individual, etor::ParallelEvaluator{F,FA})
-    candi = Candidate{FA}(params)
+    candi = Candidate{FA}(params, -1, etor.arch_nafitness)
     job_id = async_update_fitness(etor, candi, wait=true)
     while !is_stopping(etor) &&
           !(isempty(etor.waiting_candidates) && isempty(etor.unclaimed_candidates))
-        #info("fitness(): wait()")
         if isready(etor, job_id)
+            info("fitness(): done")
             return fitness(candi)
         end
+        info("fitness(): wait()")
         wait(etor)
     end
-    throw(InternalError("Fitness not evaluated"))
+    error("Fitness not evaluated")
 end
