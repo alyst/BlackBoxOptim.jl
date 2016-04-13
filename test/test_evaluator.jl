@@ -65,6 +65,24 @@ facts("Evaluator") do
 if BlackBoxOptim.enable_parallel_methods
   context("ParallelEvaluator") do
     evaluator_tests(() -> BlackBoxOptim.ParallelEvaluator(p, pids=workers()))
+
+    context("multi-objective problem") do
+        schaffer1(x) = (sumabs2(x), sumabs2(x .- 2.0))
+        p = BlackBoxOptim.FunctionBasedProblem(schaffer1, "Schaffer1", ParetoFitnessScheme{2}(is_minimizing=true),
+                                                     symmetric_search_space(5, (-10.0, 10.0)))
+        a = EpsBoxArchive(convert(EpsBoxDominanceFitnessScheme, fitness_scheme(p)), max_size=100)
+
+        e = BlackBoxOptim.ParallelEvaluator(p, a, pids=workers())
+        fit1 = fitness([0.0, 1.0, 2.0, 3.0, 4.0], e)
+        @fact BlackBoxOptim.num_evals(e) --> 1
+        @fact BlackBoxOptim.last_fitness(e) --> fit1.orig
+
+        fit2 = fitness([0.0, -1.0, -2.0, -3.0, -4.0], e)
+        @fact BlackBoxOptim.num_evals(e) --> 2
+        @fact BlackBoxOptim.last_fitness(e) --> fit2.orig
+
+        BlackBoxOptim.shutdown!(e)
+    end
   end
 end
 
