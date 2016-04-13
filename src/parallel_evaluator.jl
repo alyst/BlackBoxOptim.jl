@@ -26,7 +26,7 @@ function run!(worker::ParallelEvaluatorWorker)
     while true
         #info("Checking in worker #$(worker.id)")
         i = 0
-        while param_status(worker) == 0 || fitness_status(worker) != 0
+        while param_status(worker) == 0 || fitness_status(worker) > 0
             i += 1
             if i > 1000
                 yield()
@@ -56,25 +56,25 @@ function run_parallel_evaluator_worker(id::Int,
   info("Initializing ParallelEvaluator worker #$id at task=$(myid())")
   worker = nothing
   try
-    worker = ParallelEvaluatorWorker(id, problem,
+    worker = ParallelEvaluatorWorker(id, deepcopy(problem),
                 param_status, shared_param,
                 fitness_status, shared_fitness)
   catch e
     # send -id to notify about an error and to release
     # the master from waiting for worker readiness
-    info("Exception: $e")
+    warn("Exception at ParallelEvaluatorWorker initialization: $e")
     put!(worker_ready, -id)
     rethrow(e)
   end
   # create immigrants receiving tasks=#
   put!(worker_ready, id)
-  info("Running worker #$id")
+  info("Running worker #$id...")
   try
     run!(worker)
   catch e
     # send error candidate to notify about an error and to release
     # the master from waiting for worker messages
-    info("Exception: $e")
+    warn("Exception while running ParallelEvaluatorWorker: $e")
     worker.fitness_status[1] = -2
     rethrow(e)
   end
@@ -234,7 +234,7 @@ end
 function shutdown!(etor::ParallelEvaluator)
     info("shutdown!(ParallelEvaluator)")
     if etor.is_stopping
-        throw(InternalError("Cannot shutdown!(ParallelEvaluator) twice"))
+        error("Cannot shutdown!(ParallelEvaluator) twice")
     end
     etor.is_stopping = true
     # notify the workers that they should shutdown (each worker should pick exactly one message)
@@ -254,6 +254,7 @@ function _shutdown!(etor::ParallelEvaluator)
     end
     for i in 1:nworkers(etor)
         etor.params_status[i][1] = -1
+        etor.fitnesses_status[i][1] = -1
     end
     etor
 end
@@ -451,6 +452,13 @@ function process_completed!(f::Function, etor::ParallelEvaluator)
 end
 
 """
+    fitness_done(etor::ParallelEvaluator)
+
+    Get the condition that is triggered each time fitness evaluation completes.
+"""
+@inline fitness_done(etor::ParallelEvaluator) = etor.fitness_slots.cond_wait
+
+"""
     Calculate fitness for given candidates.
     Waits until all fitnesses have been calculated.
 """
@@ -478,23 +486,14 @@ function update_fitness!{F,FA}(etor::ParallelEvaluator{F,FA}, candidates::Vector
         end
         if n_pending > 0 && isempty(etor.unclaimed_candidates)
             #info("update_fitness!(): wait()")
-            wait(etor)
+            wait(fitness_done(etor))
         end
     end
     if n_pending > 0
-        throw(InternalError("Fitnesses not evaluated ($job_ids)"))
+        error("Fitnesses not evaluated (#$job_ids)")
     end
     return candidates
 end
-
-"""
-    wait(etor::ParallelEvaluator)
-
-    Wait until any queued fitness evaluation is complete.
-"""
-Base.wait(etor::ParallelEvaluator) = wait(etor.archive_slots.cond_wait)
-
-isasynchronous(etor::ParallelEvaluator) = isempty(etor.archive_slots.cond_wait.waitq)
 
 # FIXME it's not efficient to calculate fitness like that with `ParallelEvaluator`
 function fitness{F,FA}(params::Individual, etor::ParallelEvaluator{F,FA})
@@ -503,11 +502,10 @@ function fitness{F,FA}(params::Individual, etor::ParallelEvaluator{F,FA})
     while !is_stopping(etor) &&
           !(isempty(etor.waiting_candidates) && isempty(etor.unclaimed_candidates))
         if isready(etor, job_id)
-            info("fitness(): done")
             return fitness(candi)
+        else
+            wait(fitness_done(etor))
         end
-        info("fitness(): wait()")
-        wait(etor)
     end
     error("Fitness not evaluated")
 end
