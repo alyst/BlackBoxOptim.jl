@@ -23,6 +23,44 @@ aggregate{N,F}(f::NTuple{N,F}, fs::TupleFitnessScheme{N,F}) = fs.aggregator(f)
 @inline is_worse{N,F}(f1::NTuple{N,F}, f2::NTuple{N,F}, fs::TupleFitnessScheme{N,F,NTuple{N,F}}) = hat_compare(f1, f2, fs, 1) == 1
 
 """
+    get_fitness(::Type{FitnessType}, src::AbstractMatrix, col_ix)
+
+Get fitness stored in a column of a matrix.
+Used by `ParallelEvaluator` to get the fitness from the `SharedArray`.
+"""
+function get_fitness{F<:Number}(::Type{F}, src::AbstractVector{F})
+    @inbounds begin
+        return src[1]
+    end
+end
+@generated function get_fitness{N, F<:Number}(::Type{NTuple{N,F}}, src::AbstractVector{F})
+    quote
+        @inbounds begin
+            return Base.Cartesian.@ntuple $N i -> src[i]
+        end
+    end
+end
+
+"""
+    put_fitness!(src::AbstractMatrix, fitness, col_ix)
+
+Put fitness into a column of a matrix.
+Used by `ParallelEvaluator` to store the fitness in the `SharedArray`.
+"""
+function put_fitness!{F<:Number}(dest::AbstractVector{F}, fitness::F)
+    @inbounds begin
+        dest[1] = fitness
+    end
+end
+@generated function put_fitness!{N, F<:Number}(dest::AbstractVector{F}, fitness::NTuple{N,F})
+    quote
+        @inbounds begin
+            Base.Cartesian.@nexprs $N i -> dest[i] = fitness[i]
+        end
+    end
+end
+
+"""
 Pareto dominance for `N`-tuple (`N`≧1) fitnesses.
 
 `aggregator::AGG` is a function mapping tuple fitness to a single numerical value.
