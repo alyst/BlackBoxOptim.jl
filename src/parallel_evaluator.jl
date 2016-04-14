@@ -118,10 +118,8 @@ mutable struct ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archiv
     shared_fitnesses::Vector{SharedVector{T}}
 
     fitness_slots::Base.Semaphore
-    archive_slots::Base.Semaphore
 
     waiting_candidates::PECandidateDict{FA}
-    calculated_fitnesses::Dict{Int, F}
     unclaimed_candidates::PECandidateDict{FA} # done candidates that were not yet checked for completion
 
     worker2job::Vector{Int}
@@ -137,7 +135,6 @@ mutable struct ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archiv
 
     worker_refs::Vector{Future}
     workers_handler::Task
-    archive_handler::Task
 
     function ParallelEvaluator(
         problem::P, archive::A;
@@ -155,20 +152,13 @@ mutable struct ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archiv
             [SharedArray{T}((numdims(problem),), pids=vcat(pid,[myid()])) for pid in pids],
             [fill!(SharedArray{Int}((2,), pids=vcat(pid,[myid()])), 0) for pid in pids],
             [SharedArray{T}((numobjectives(fs),), pids=vcat(pid,[myid()])) for pid in pids],
-            Base.Semaphore(length(pids)), Base.Semaphore(length(pids)),
-            PECandidateDict{FA}(), Dict{Int, F}(), PECandidateDict{FA}(),
+            Base.Semaphore(length(pids)),
+            PECandidateDict{FA}(), PECandidateDict{FA}(),
             zeros(length(pids)), ReentrantLock(), 0, 0, IntSet(),
             false, 1
         )
         etor.worker_refs = _create_workers(etor, pids)
         etor.workers_handler = @schedule workers_handler!(etor)
-
-        if isa(archive, EpsBoxArchive)
-            #info("Initializing archive handler")
-            etor.archive_handler = @schedule archive_handler!(etor)
-        else
-            etor.archive_handler = Task(()->nothing) # no task
-        end
 
         #finalizer(etor, _shutdown!)
 
@@ -313,47 +303,6 @@ function update_archive!{F}(etor::ParallelEvaluator{F}, job_id::Int, fness::F)
     nothing
 end
 
-# default Archive case
-function initiate_archive_update!{F, FA, T, FS, P<:OptimizationProblem, A<:Archive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
-    Base.acquire(etor.archive_slots)
-    update_archive!(etor, job_id, fness)
-    Base.release(etor.archive_slots)
-    nothing
-end
-
-# EpsBoxArchive case, schedule an update
-function initiate_archive_update!{F, FA, T, FS, P<:OptimizationProblem, A<:EpsBoxArchive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
-    info("initiate_archive_update() for job #$job_id")
-    Base.acquire(etor.archive_slots)
-    etor.calculated_fitnesses[job_id] = fness # save fitness to process later
-    nothing
-end
-
-# fitness indexing and archive update task
-# used if archive update is an expensive operation (e.g EpsBoxArchive)
-function archive_handler!(etor::ParallelEvaluator)
-    info("archive_handler!() started")
-    while !is_stopping(etor)
-        if isempty(etor.calculated_fitnesses)
-            # wait for the new archvied fitness
-            info("archive_handler!(): waiting for fitness...")
-            Base.wait(etor.job_assignment.cond_wait)
-        else
-            # process the first fitness in the dictionary
-            job_id, fness = next(etor.calculated_fitnesses, start(etor.calculated_fitnesses))[1]
-            info("archive_handler!(): for fitness for job #$(job_id)...")
-            delete!(etor.calculated_fitnesses, job_id)
-            update_archive!(etor, job_id, fness)
-            info("archive_handler!(): release archive slot")
-            Base.release(etor.archive_slots)
-            yield()
-        end
-        if is_stopping(etor)
-            break
-        end
-    end
-end
-
 """
 Process all incoming "fitness ready" messages until the evaluator is stopped.
 """
@@ -403,6 +352,7 @@ function workers_handler!{F}(etor::ParallelEvaluator{F})
             end
         end
     end
+    info("workers_handler!() stopped")
 end
 
 """
