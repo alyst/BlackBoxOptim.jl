@@ -40,7 +40,7 @@ function run!(worker::ParallelEvaluatorWorker)
             break # error
         end
         worker.param_status[1] = 0 # received
-        #info("PE worker #$(worker.id): got job in slot #$(slot_id)")
+        #info("PE worker #$(worker.id): got job")
         put_fitness!(worker.shared_fitness, fitness(worker.shared_param, worker.problem))
         worker.fitness_status[1] = 1 # fitness ready
     end
@@ -295,7 +295,7 @@ function workers_handler!{F}(etor::ParallelEvaluator{F})
     info("workers_handler!() started")
     while !is_stopping(etor)
         # master critical section
-        for worker_ix in 1:nworkers(etor)
+        @inbounds for worker_ix in 1:nworkers(etor)
             #info("workers_handler!(): checking worker #$worker_ix...")
             #@assert check_worker_running(etor.worker_refs[worker_ix])
             if etor.worker2job[worker_ix] > 0 && etor.fitnesses_status[worker_ix][1] != 0 && etor.params_status[worker_ix][1] == 0
