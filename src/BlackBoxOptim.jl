@@ -7,6 +7,7 @@ using Compat: String, view
 
 export  Optimizer, AskTellOptimizer, SteppingOptimizer, PopulationOptimizer,
         bboptimize, bbsetup, compare_optimizers,
+        ParallelPopulationOptimizer,
 
         DiffEvoOpt, de_rand_1_bin, de_rand_1_bin_radiuslimited,
         adaptive_de_rand_1_bin, adaptive_de_rand_1_bin_radiuslimited,
@@ -88,6 +89,8 @@ module Utils
   include("utilities/assign_ranks.jl")
 end
 
+typealias ChannelRef{T} @compat RemoteChannel{Channel{T}}
+
 include("search_space.jl")
 include("parameters.jl")
 include("fitness.jl")
@@ -119,6 +122,7 @@ include("resampling_memetic_search.jl")
 include("simultaneous_perturbation_stochastic_approximation.jl")
 include("generating_set_search.jl")
 include("direct_search_with_probabilistic_descent.jl")
+include("parallel_population_optimizer.jl")
 
 # multi-objective optimization algorithms
 include("borg_moea.jl")

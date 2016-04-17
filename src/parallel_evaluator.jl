@@ -1,5 +1,3 @@
-typealias ChannelRef{T} @compat RemoteChannel{Channel{T}}
-
 const PEStatus_Msg = 1
 const PEStatus_OK = 0
 const PEStatus_Stopped = -1
