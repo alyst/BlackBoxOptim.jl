@@ -23,6 +23,7 @@ my_tests = [
   "test_differential_evolution.jl",
   "test_adaptive_differential_evolution.jl",
   "test_natural_evolution_strategies.jl",
+  "test_parallel_population_optimizer.jl",
 
   "test_borg_moea.jl",
 

@@ -108,10 +108,12 @@ pareto_frontier(or::OptimizationResults) = or.archive_output.frontier
 immutable PopulationOptimizerOutput{P} <: MethodOutput
   population::P
 
-  Base.call(::Type{PopulationOptimizerOutput}, method::PopulationOptimizer) =
+  Base.call(::Type{PopulationOptimizerOutput},
+            method::Union{PopulationOptimizer, ParallelPopulationOptimizer}) =
     new{typeof(population(method))}(population(method))
 end
 
-Base.call(::Type{MethodOutput}, optimizer::PopulationOptimizer) = PopulationOptimizerOutput(optimizer)
+Base.call(::Type{MethodOutput}, optimizer::Union{PopulationOptimizer, ParallelPopulationOptimizer}) =
+    PopulationOptimizerOutput(optimizer)
 
 population(or::OptimizationResults) = or.method_output.population

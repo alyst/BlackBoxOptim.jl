@@ -19,6 +19,7 @@ const SingleObjectiveMethods = ParamsDict(
   :simultaneous_perturbation_stochastic_approximation => SimultaneousPerturbationSA2,
   :generating_set_search => GeneratingSetSearcher,
   :probabilistic_descent => direct_search_probabilistic_descent,
+  :parallel_population_optimizer => parallel_population_optimizer,
 )
 
 const SingleObjectiveMethodNames = sort!(collect(keys(SingleObjectiveMethods)))

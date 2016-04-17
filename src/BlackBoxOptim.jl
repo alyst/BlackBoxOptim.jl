@@ -12,6 +12,7 @@ enable_parallel_methods = VERSION >= v"0.4.0" && VERSION < v"0.5.0-"
 
 export  Optimizer, AskTellOptimizer, SteppingOptimizer, PopulationOptimizer,
         bboptimize, bbsetup, compare_optimizers,
+        ParallelPopulationOptimizer,
 
         DiffEvoOpt, de_rand_1_bin, de_rand_1_bin_radiuslimited,
         adaptive_de_rand_1_bin, adaptive_de_rand_1_bin_radiuslimited,
@@ -123,6 +124,7 @@ include("resampling_memetic_search.jl")
 include("simultaneous_perturbation_stochastic_approximation.jl")
 include("generating_set_search.jl")
 include("direct_search_with_probabilistic_descent.jl")
+include("parallel_population_optimizer.jl")
 
 # multi-objective optimization algorithms
 include("borg_moea.jl")
