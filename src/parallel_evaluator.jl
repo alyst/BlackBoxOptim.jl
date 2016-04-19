@@ -229,9 +229,18 @@ function shutdown!(etor::ParallelEvaluator)
     etor.is_stopping = true
     # notify the workers that they should shutdown (each worker should pick exactly one message)
     _shutdown!(etor)
-    # release any waiting tasks
-    notify(etor.fitness_slots.cond_wait)
-    notify(etor.job_assignment.cond_wait)
+    # notify the workers handler if it's waiting for jobs
+    lock(etor.job_assignment)
+    unlock(etor.job_assignment)
+    # wait for all the workers
+    for i in 1:nworkers(etor)
+        Base.acquire(etor.fitness_slots)
+    end
+    @assert !any(isposdef, etor.worker2job) "Some workers not finished"
+    # release any waiting
+    for i in 1:nworkers(etor)
+        Base.release(etor.fitness_slots)
+    end
 end
 
 function _shutdown!(etor::ParallelEvaluator)
@@ -243,7 +252,6 @@ function _shutdown!(etor::ParallelEvaluator)
     end
     for i in 1:nworkers(etor)
         etor.params_status[i][1] = -1
-        etor.fitnesses_status[i][1] = -1
     end
     etor
 end
@@ -290,19 +298,18 @@ end
 """
 function workers_handler!{F}(etor::ParallelEvaluator{F})
     info("workers_handler!() started")
-    while !is_stopping(etor)
+    while !is_stopping(etor) || !isempty(etor.waiting_candidates)
         # master critical section
         @inbounds for worker_ix in 1:nworkers(etor)
             #info("workers_handler!(): checking worker #$worker_ix...")
             #@assert check_worker_running(etor.worker_refs[worker_ix])
-            if etor.worker2job[worker_ix] > 0 && etor.fitnesses_status[worker_ix][1] != 0 && etor.params_status[worker_ix][1] == 0
-                if etor.fitnesses_status[worker_ix][1] < 0
-                    error("Worker $worker_ix bad status: $(etor.fitnesses_status[worker_ix][1])")
+            if (job_id = etor.worker2job[worker_ix]) > 0 && (fitness_status = etor.fitnesses_status[worker_ix][1]) != 0
+                if fitness_status < 0 && !is_stopping(etor)
+                    error("Worker $worker_ix bad status: $(fitness_status)")
                 end
                 #info("worker_handler!(): fitness_evaluated")
-
                 lock(etor.job_assignment)
-                job_id = etor.worker2job[worker_ix]
+                param_status = etor.params_status[worker_ix][1]
                 new_fitness = get_fitness(F, etor.shared_fitnesses[worker_ix])
                 @assert job_id > 0
 
@@ -312,14 +319,21 @@ function workers_handler!{F}(etor::ParallelEvaluator{F})
                 etor.fitnesses_status[worker_ix][1] = 0 # received
                 unlock(etor.job_assignment)
 
-                update_archive!(etor, job_id, new_fitness)
-                Base.release(etor.fitness_slots)
+                if param_status == 0 # communication in normal state, update the archive
+                    update_archive!(etor, job_id, new_fitness)
+                elseif param_status < 0
+                    # remove the candidate
+                    delete!(etor.waiting_candidates, job_id)
+                end
+                if fitness_status > 0
+                    Base.release(etor.fitness_slots)
+                end
                 #info("workers_handler!(): yield to other tasks after archive update")
                 #yield() # free slots available, switch to the main task
             end
         end
         if length(etor.waiting_candidates) < nworkers(etor)
-            if isempty(etor.waiting_candidates)
+            if !is_stopping(etor) && isempty(etor.waiting_candidates)
                 wait(etor.job_assignment.cond_wait)
             else
                 #info("workers_handler!(): yield to other tasks")
@@ -344,7 +358,7 @@ end
 """
 function async_update_fitness{F,FA}(etor::ParallelEvaluator{F,FA}, candi::Candidate{FA}; force::Bool=false, wait::Bool=false)
     #info("async_update_fitness(): starting to assign job #$(etor.next_job_id)")
-    if force || isnafitness(fitness(candi), fitness_scheme(etor.archive))
+    if !etor.is_stopping && (force || isnafitness(fitness(candi), fitness_scheme(etor.archive)))
         if length(etor.waiting_candidates) >= queue_capacity(etor) && !wait
             #info("async_update_fitness(): queue is full, skip")
             return 0
