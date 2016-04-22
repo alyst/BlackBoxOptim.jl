@@ -11,6 +11,8 @@ type BorgMOEA{FS<:FitnessScheme,V<:Evaluator,P<:Population,M<:GeneticOperator,E<
 
   n_restarts::Int
   n_steps::Int
+  n_recombined::Int
+  n_processed::Int
   last_restart_check::Int
   last_restart::Int
   last_wrecombinate_update::Int
@@ -48,7 +50,7 @@ type BorgMOEA{FS<:FitnessScheme,V<:Evaluator,P<:Population,M<:GeneticOperator,E<
     fit_scheme = convert(EpsBoxDominanceFitnessScheme, fit_scheme, params[:ϵ])
     archive = EpsBoxArchive(fit_scheme, params)
     evaluator = make_evaluator(problem, archive, params)
-    new{typeof(fit_scheme),typeof(evaluator),P,M,E}(evaluator, pop, Vector{Int}(), 0, 0, 0, 0, 0,
+    new{typeof(fit_scheme),typeof(evaluator),P,M,E}(evaluator, pop, Vector{Int}(), 0, 0, 0, 0, 0, 0, 0,
            params[:τ], params[:γ], params[:γ_δ], params[:PopulationSize],
            Categorical(ones(length(recombinate))/length(recombinate)),
            params[:θ], params[:ζ], params[:OperatorsUpdatePeriod], params[:RestartCheckPeriod],
@@ -113,6 +115,12 @@ function step!(alg::BorgMOEA)
     if alg.n_steps >= alg.last_wrecombinate_update + alg.wrecombinate_update_period
         update_recombination_weights!(alg)
     end
+    recombine_individuals!(alg)
+    return alg
+end
+
+function recombine_individuals!(alg::BorgMOEA)
+    prepare_recombination(alg)
     # Select the operators to apply based on their probabilities
     recomb_op_ix = rand(alg.recombinate_distr)
     recombinate!(alg, recomb_op_ix, alg.recombinate[recomb_op_ix])
@@ -137,16 +145,45 @@ function recombinate!(alg::BorgMOEA, recomb_op_ix::Int, recomb_op::CrossoverOper
     apply!(recomb_op, Individual[child.params for child in children],
            zeros(Int, length(children)), alg.population, parent_indices)
     for child in children
-        child.extra = recomb_op
-        child.tag = recomb_op_ix
-        process_candidate!(alg, child, parent_indices[1])
+        preprocess_recombined!(alg, child, recomb_op_ix, parent_indices[1])
+        alg.n_recombined += 1
+        postprocess_recombined!(alg, child)
     end
 end
 
-function process_candidate!(alg::BorgMOEA, candi::Candidate, ref_index::Int)
+prepare_recombination(alg::BorgMOEA) = nothing # do nothing
+
+function preprocess_recombined!(alg::BorgMOEA, candi::Candidate, recomb_op_ix::Int, ref_index::Int)
     apply!(alg.embed, candi.params, alg.population, ref_index)
     reset_fitness!(candi, alg.population)
-    ifitness = fitness(update_fitness!(alg.evaluator, candi)) # implicitly updates the archive
+    candi.extra = alg.recombinate[recomb_op_ix]
+    candi.tag = recomb_op_ix
+    candi
+end
+
+function postprocess_recombined!(alg::BorgMOEA, candi::Candidate)
+    update_fitness!(alg.evaluator, candi) # implicitly updates the archive
+    process_candidate!(alg, candi)
+end
+
+# ParallelEvaluator version -- process previously submitted candidates with the completed fitness
+function prepare_recombination{FS<:FitnessScheme,V<:ParallelEvaluator}(alg::BorgMOEA{FS,V})
+    process_completed!(alg.evaluator) do fit_job_id, candi
+        process_candidate!(alg, candi)
+        true
+    end
+end
+
+# ParallelEvaluator version, just submit to fitness calculation, nothing else
+# if the queue is full, waits until some jobs are processed -- that established the
+# balance between recombining and fitness evaluation
+function postprocess_recombined!{FS<:FitnessScheme,V<:ParallelEvaluator}(alg::BorgMOEA{FS,V}, candi::Candidate)
+    async_update_fitness(alg.evaluator, candi, wait=true)
+    candi
+end
+
+function process_candidate!(alg::BorgMOEA, candi::Candidate)
+    ifitness = fitness(candi)
     # test the population
     hat_comp = HatCompare(fitness_scheme(archive(alg)))
     popsz = popsize(alg.population)
@@ -189,6 +226,7 @@ function process_candidate!(alg::BorgMOEA, candi::Candidate, ref_index::Int)
     else
         release_candi(alg.population, candi)
     end
+    alg.n_processed += 1
     alg
 end
 
@@ -215,6 +253,38 @@ function update_population_fitness!(alg::BorgMOEA)
             update_fitness!(alg.evaluator, candi)
             alg.population.fitness[candi.index] = candi.fitness
             release_candi(alg.population, candi)
+        end
+    end
+end
+
+function update_population_fitness!{FS<:FitnessScheme,V<:ParallelEvaluator}(alg::BorgMOEA{FS,V})
+    fs = fitness_scheme(alg.evaluator.archive)
+    popsz = popsize(alg.population)
+    last_checked = n_processed = 0
+    job_ids = IntSet()
+    while n_processed < popsz
+        # process the calculated fitnesses
+        process_completed!(alg.evaluator) do fit_job_id, candi
+            if pop!(job_ids, fit_job_id, 0) > 0
+                alg.population.fitness[candi.index] = candi.fitness
+                release_candi(alg.population, candi)
+                n_processed += 1
+                return true
+            else
+                return false # some unrelated candidate, skip
+            end
+        end
+        if last_checked < popsz
+            # submit to fitness evaluation
+            ix = (last_checked += 1)
+            if isnafitness(fitness(alg.population, ix), fs)
+                candi = acquire_candi(alg.population, ix)
+                push!(job_ids, async_update_fitness(alg.evaluator, candi, wait=true))
+            else # fitness already calculated
+                n_processed += 1
+            end
+        else
+            yield() # allow the other tasks to process the incoming fitnesses
         end
     end
 end
@@ -248,6 +318,31 @@ function populate_by_mutants(alg::BorgMOEA, last_nonmutant::Int)
         mutant = acquire_mutant(alg, i, last_nonmutant)
         update_fitness!(alg.evaluator, mutant)
         accept_candi!(alg.population, mutant)
+    end
+end
+
+function populate_by_mutants{FS<:FitnessScheme,V<:ParallelEvaluator}(alg::BorgMOEA{FS,V}, last_nonmutant::Int)
+    popsz = popsize(alg.population)
+    last_submitted = last_accepted = last_nonmutant
+    mutant_job_ids = IntSet()
+    while last_accepted < popsz
+        # process the calculated fitnesses
+        process_completed!(alg.evaluator) do fit_job_id, candi
+            if pop!(mutant_job_ids, fit_job_id, 0) > 0 # it's our mutant!
+                candi.index = (last_accepted += 1)
+                accept_candi!(alg.population, candi)
+                return true
+            else
+                return false # some unrelated candidate, skip
+            end
+        end
+        if last_submitted < popsz
+            # generate the new mutant and submit to fitness evaluation
+            mutant = acquire_mutant(alg, last_submitted+=1, last_nonmutant)
+            push!(mutant_job_ids, async_update_fitness(alg.evaluator, mutant, wait=true))
+        else
+            yield() # allow the other tasks to process the incoming fitnesses
+        end
     end
 end
 
