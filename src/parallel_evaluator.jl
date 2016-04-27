@@ -142,7 +142,7 @@ type ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archive} <: Eval
         fs = fitness_scheme(problem)
         F = fitness_type(fs)
         T = fitness_eltype(fs)
-        FA = archived_fitness_type(archive)
+        FA = fitness_type(archive)
 
         param_status = []
 
@@ -291,7 +291,7 @@ function process_fitness{F}(etor::ParallelEvaluator{F}, worker_ix::Int)
     update_archive!(etor, job_id, new_fitness)
 end
 
-function update_archive!{F, FA, T, FS, P<:OptimizationProblem, A<:Archive}(etor::ParallelEvaluator{F,FA,T,FS,P,A}, job_id::Int, fness::F)
+function update_archive!{F}(etor::ParallelEvaluator{F}, job_id::Int, fness::F)
     # update the list of done jobs
     #info("update_archive()")
     candi = pop!(etor.waiting_candidates, job_id)
@@ -300,7 +300,8 @@ function update_archive!{F, FA, T, FS, P<:OptimizationProblem, A<:Archive}(etor:
         error("Too many unclaimed candidates with evaluated fitness")
     end
     update_done_jobs!(etor, job_id)
-    etor.last_fitness = candi.fitness = archived_fitness(fness, etor.archive)
+    etor.last_fitness = fness
+    candi.fitness = archived_fitness(fness, etor.archive)
     etor.num_evals += 1
     #info("update_archive(): add_candidate()")
     add_candidate!(etor.archive, candi.fitness, candi.params, candi.tag, etor.num_evals)
