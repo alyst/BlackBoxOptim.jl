@@ -237,9 +237,7 @@ end
 
 function shutdown!(etor::ParallelEvaluator)
     info("shutdown!(ParallelEvaluator)")
-    if etor.is_stopping
-        error("Cannot shutdown!(ParallelEvaluator) twice")
-    end
+    !etor.is_stopping || error("Cannot shutdown!(ParallelEvaluator) twice")
     etor.is_stopping = true
     # notify the workers that they should shutdown (each worker should pick exactly one message)
     _shutdown!(etor)
@@ -296,9 +294,7 @@ function update_archive!{F}(etor::ParallelEvaluator{F}, job_id::Int, fness::F)
     #info("update_archive()")
     candi = pop!(etor.waiting_candidates, job_id)
     etor.unclaimed_candidates[job_id] = candi
-    if length(etor.unclaimed_candidates) > 1000_000 # sanity check
-        error("Too many unclaimed candidates with evaluated fitness")
-    end
+    @assert length(etor.unclaimed_candidates) <= 1000_000 # sanity check
     update_done_jobs!(etor, job_id)
     etor.last_fitness = fness
     candi.fitness = archived_fitness(fness, etor.archive)
@@ -318,10 +314,9 @@ function workers_handler!{F}(etor::ParallelEvaluator{F})
         @inbounds for worker_ix in 1:nworkers(etor)
             #info("workers_handler!(): checking worker #$worker_ix...")
             #@assert check_worker_running(etor.worker_refs[worker_ix])
-            if (job_id = etor.worker2job[worker_ix]) > 0 && (fitness_status = etor.fitnesses_status[worker_ix][1]) != PEStatus_OK
-                if fitness_status < 0 && !is_stopping(etor)
-                    error("Worker #$worker_ix bad status: $(fitness_status)")
-                end
+            if (job_id = etor.worker2job[worker_ix]) > 0 &&
+               (fitness_status = etor.fitnesses_status[worker_ix][1]) != PEStatus_OK
+                @assert (fitness_status == PEStatus_Msg || is_stopping(etor)) "Worker #$worker_ix bad status: $(fitness_status)"
                 #info("worker_handler!(): fitness_evaluated")
                 lock(etor.job_assignment)
                 param_status = etor.params_status[worker_ix][1]
@@ -381,9 +376,7 @@ function async_update_fitness{F,FA}(etor::ParallelEvaluator{F,FA}, candi::Candid
         #info("async_update_fitness(): initial slot_state: $(etor.worker2job), $(etor.fitness_slots.curr_cnt)")
         lock(etor.job_assignment)
         worker_ix = findfirst(etor.worker2job, 0)
-        if worker_ix == 0
-            error("Cannot find a worker to put a job to")
-        end
+        @assert (worker_ix > 0) "Cannot find a worker #$(worker_ix) to put a job to"
         etor.worker2job[worker_ix] = job_id = etor.next_job_id
         etor.next_job_id += 1
         copy!(etor.shared_params[worker_ix], candi.params) # share candidate with the workers
@@ -472,9 +465,7 @@ function update_fitness!{F,FA}(etor::ParallelEvaluator{F,FA}, candidates::Vector
             wait(fitness_done(etor))
         end
     end
-    if n_pending > 0
-        error("Fitnesses not evaluated (#$job_ids)")
-    end
+    @assert (n_pending == 0) "Fitnesses not evaluated (#$job_ids)"
     return candidates
 end
 
@@ -492,5 +483,5 @@ function fitness{F,FA}(params::Individual, etor::ParallelEvaluator{F,FA})
             wait(fitness_done(etor))
         end
     end
-    throw(InternalError("Fitness not evaluated"))
+    error("Fitness not evaluated")
 end
