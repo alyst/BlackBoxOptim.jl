@@ -1,25 +1,25 @@
 facts("Bimodal Cauchy Distributions") do
 
-  context("sample bimodal cauchy with truncation on one side") do
-    bc = BlackBoxOptim.bimodal_cauchy(0.65, 0.1, 1.0, 0.1)
+  context("sample bimodal cauchy with truncation above 1") do
+    bc = BlackBoxOptim.BimodalCauchy(0.65, 0.1, 1.0, 0.1, clampBelow0=false)
 
-    for i in 1:100
-      v = BlackBoxOptim.sample_bimodal_cauchy(bc; truncateAbove1 = true, truncateBelow0 = false)
-
-      @fact v --> less_than_or_equal(1.0)
-      @fact v --> greater_than(0.0) # Very unlikely to be 0.0!!?
+    n_ok = 0
+    for _ in 1:10000
+      v = rand(bc)
+      (0.0 < v <= 1.0) && (n_ok += 1)
     end
+    @fact n_ok --> 10000
   end
 
-  context("sample bimodal cauchy with truncation on both sides") do
-    bc = BlackBoxOptim.bimodal_cauchy(0.1, 0.1, 0.95, 0.1)
+  context("sample bimodal cauchy with truncation below 0 and above 1") do
+    bc = BlackBoxOptim.BimodalCauchy(0.1, 0.1, 0.95, 0.1)
 
-    for i in 1:100
-      v = BlackBoxOptim.sample_bimodal_cauchy(bc; truncateAbove1 = true, truncateBelow0 = true)
-
-      @fact v --> less_than_or_equal(1.0)
-      @fact v --> greater_than_or_equal(0.0)
+    n_ok = 0
+    for _ in 1:10000
+      v = rand(bc)
+      (0.0 <= v <= 1.0) && (n_ok += 1)
     end
+    @fact n_ok --> 10000
   end
 
 end
