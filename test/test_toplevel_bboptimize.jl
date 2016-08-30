@@ -68,7 +68,6 @@ facts("Top-level interface") do
       @fact (min_fitness_value == best_fitness(res)) --> true
     end
 
-if BlackBoxOptim.enable_parallel_methods
     context("using population optimizer and parallel evaluator") do
       opt = bbsetup(rosenbrock; Method=:adaptive_de_rand_1_bin,
                     SearchRange = (-5.0, 5.0), NumDimensions = 2,
@@ -76,7 +75,6 @@ if BlackBoxOptim.enable_parallel_methods
       res = bboptimize(opt)
       @fact isa(BlackBoxOptim.evaluator(lastrun(opt)), BlackBoxOptim.ParallelEvaluator) --> true
     end
-end
 
   end
 

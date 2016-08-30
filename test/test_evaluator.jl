@@ -75,10 +75,8 @@ facts("Evaluator") do
     @fact sortperm(candidates, by = fitness) --> collect(1:10)
   end
 
-if BlackBoxOptim.enable_parallel_methods
   context("ParallelEvaluator") do
     evaluator_tests(() -> BlackBoxOptim.ParallelEvaluator(p, pids=workers()))
   end
-end
 
 end
