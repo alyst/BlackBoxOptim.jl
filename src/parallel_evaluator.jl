@@ -132,10 +132,10 @@ type ParallelEvaluator{F, FA, T, FS, P<:OptimizationProblem, A<:Archive} <: Eval
     is_stopping::Bool
     next_job_id::Int
 
-    worker_refs::Vector{ChannelRef{Any}}
+    @compat worker_refs::Vector{Future}
     workers_handler::Task
 
-    @compat (::Type{ParallelEvaluator}){P<:OptimizationProblem, A<:Archive}(
+    @compat function (::Type{ParallelEvaluator}){P<:OptimizationProblem, A<:Archive}(
         problem::P, archive::A;
         pids::AbstractVector{Int} = workers())
 
@@ -211,7 +211,7 @@ function _create_workers(etor::ParallelEvaluator, pids::AbstractVector{Int})
     fitnesses_status = etor.fitnesses_status
     shared_fitnesses = etor.shared_fitnesses
 
-    worker_refs = ChannelRef{Any}[@spawnat(pid, run_parallel_evaluator_worker(i,
+    worker_refs = @compat Future[@spawnat(pid, run_parallel_evaluator_worker(i,
                        workers_ready, problem,
                        params_status[i], shared_params[i],
                        fitnesses_status[i], shared_fitnesses[i])) for (i, pid) in enumerate(pids)]
@@ -246,11 +246,13 @@ function shutdown!(etor::ParallelEvaluator)
     unlock(etor.job_assignment)
     # wait for all the workers
     for i in 1:nworkers(etor)
+        #info("$i worker(s) finished")
         Base.acquire(etor.fitness_slots)
     end
     @assert !any(isposdef, etor.worker2job) "Some workers not finished"
     # release any waiting
     for i in 1:nworkers(etor)
+        #info("$i worker(s) released")
         Base.release(etor.fitness_slots)
     end
 end
