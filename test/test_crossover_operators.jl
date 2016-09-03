@@ -73,4 +73,15 @@ end
     @test sum(mut_res .== BlackBoxOptim.viewer(pop, 2)) == 0
 end
 
+context("MutationWrapper") do
+    ss = symmetric_search_space(2, (0.0, 10.0))
+    pop = reshape(collect(1.0:8.0), 2, 4)
+    gibbs = UniformMutation(ss)
+    gibbs_wrapper = BlackBoxOptim.MutationWrapper(gibbs)
+    @fact numchildren(gibbs_wrapper) --> 1
+    @fact numparents(gibbs_wrapper) --> 1
+    mut_res = BlackBoxOptim.apply!(gibbs_wrapper, [0.0, 0.0], 1, pop, [2])
+    @fact sum(mut_res .== BlackBoxOptim.viewer(pop, 2)) --> 0
+end
+
 end
