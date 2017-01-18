@@ -1,8 +1,8 @@
 """
-  Borg MOEA algorithm.
+Borg MOEA algorithm.
 
-  Based on Hadka & Reed, "Borg: An Auto-Adaptive Many-Objective Evolutionary Computing
-  Framework", Evol. Comp. 2013
+Based on Hadka & Reed, "Borg: An Auto-Adaptive Many-Objective Evolutionary Computing
+Framework", Evol. Comp. 2013
 """
 type BorgMOEA{FS<:FitnessScheme,V<:Evaluator,P<:Population,M<:GeneticOperator,E<:EmbeddingOperator} <: SteppingOptimizer
   evaluator::V
@@ -347,9 +347,8 @@ function populate_by_mutants{FS<:FitnessScheme,V<:ParallelEvaluator}(alg::BorgMO
 end
 
 """
-    Restart Borg MOEA.
-
-    Resize and refills the population from the archive.
+Restart Borg MOEA.
+Resize and refill the population from the archive.
 """
 function restart!(alg::BorgMOEA)
     notify!(archive(alg), :restart)

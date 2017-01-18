@@ -16,11 +16,11 @@ immutable DummyMethodOutput <: MethodOutput end
 @compat (::Type{MethodOutput})(method::Optimizer) = DummyMethodOutput()
 
 """
-  The results of running optimization method.
+The results of running optimization method.
 
-  Returned by `run!(oc::OptRunController)`.
-  Should be compatible (on the API level) with the `Optim` package.
-  See `make_opt_results()`.
+Returned by `run!(oc::OptRunController)`.
+Should be compatible (on the API level) with the `Optim` package.
+See `make_opt_results()`.
 """
 type OptimizationResults
   method::String           # FIXME symbol instead or flexible?
@@ -69,7 +69,7 @@ f_minimum(or::OptimizationResults) = best_fitness(or)
 iteration_converged(or::OptimizationResults) = iterations(or) >= parameters(or)[:MaxSteps]
 
 """
-    `TopListArchive`-specific components of the optimization results.
+`TopListArchive`-specific components of the optimization results.
 """
 immutable TopListArchiveOutput{F,C} <: ArchiveOutput
   best_fitness::F
@@ -82,7 +82,7 @@ end
 @compat (::Type{ArchiveOutput})(archive::TopListArchive) = TopListArchiveOutput(archive)
 
 """
-    Wrapper for `FrontierIndividual` that allows easy access to the problem fitness.
+Wrapper for `FrontierIndividual` that allows easy access to the problem fitness.
 """
 immutable FrontierIndividualWrapper{F,FA} <: FitIndividual{F}
     inner::FrontierIndividual{FA}
@@ -97,7 +97,7 @@ params(indi::FrontierIndividualWrapper) = params(indi.inner)
 archived_fitness(indi::FrontierIndividualWrapper) = fitness(indi.inner)
 
 """
-    `EpsBoxArchive`-specific components of the optimization results.
+`EpsBoxArchive`-specific components of the optimization results.
 """
 immutable EpsBoxArchiveOutput{N,F,FS<:EpsBoxDominanceFitnessScheme} <: ArchiveOutput
   best_fitness::NTuple{N,F}
@@ -118,8 +118,8 @@ end
 pareto_frontier(or::OptimizationResults) = or.archive_output.frontier
 
 """
-  `PopulationOptimizer`-specific components of the `OptimizationResults`.
-  Stores the final population.
+`PopulationOptimizer`-specific components of the `OptimizationResults`.
+Stores the final population.
 """
 immutable PopulationOptimizerOutput{P} <: MethodOutput
   population::P
