@@ -38,6 +38,8 @@ type BorgMOEA{FS<:FitnessScheme,V<:Evaluator,P<:Population,M<:GeneticOperator,E<
   modify::M         # operator to mutate frontier element during restarts
   embed::E          # embedding operator
 
+  restart_callback::Function
+
   @compat function (::Type{BorgMOEA}){O<:OptimizationProblem, P<:Population,
                      M<:GeneticOperator, E<:EmbeddingOperator}(
         problem::O,
@@ -56,8 +58,12 @@ type BorgMOEA{FS<:FitnessScheme,V<:Evaluator,P<:Population,M<:GeneticOperator,E<
            params[:θ], params[:ζ], params[:OperatorsUpdatePeriod], params[:RestartCheckPeriod],
            params[:MaxStepsWithoutProgress],
            recombinate,
-           TournamentSelector(fit_scheme, ceil(Int, params[:τ]*popsize(pop))), modify, embed)
+           TournamentSelector(fit_scheme, ceil(Int, params[:τ]*popsize(pop))),
+           modify, embed, params[:RestartCallback])
   end
+end
+
+function dummy_restart_callback(alg::BorgMOEA)
 end
 
 const BorgMOEA_DefaultParameters = chain(EpsBoxArchive_DefaultParameters, ParamsDict(
@@ -68,6 +74,7 @@ const BorgMOEA_DefaultParameters = chain(EpsBoxArchive_DefaultParameters, Params
   :θ => 0.9,        # restart-discounting coefficient for recombination operator weights
   :ζ => 1.0,        # dampening coefficient for recombination operator weights
   :RestartCheckPeriod => 1000,
+  :RestartCallback => dummy_restart_callback,
   :OperatorsUpdatePeriod => 100,
   :MaxStepsWithoutProgress => 100
 ))
@@ -351,15 +358,16 @@ Restart Borg MOEA.
 Resize and refill the population from the archive.
 """
 function restart!(alg::BorgMOEA)
-    notify!(archive(alg), :restart)
-    frontier_ixs = occupied_frontier_indices(archive(alg))
-    narchived = length(frontier_ixs)
+    alg.restart_callback(alg)
+    arch = archive(alg)
+    notify!(arch, :restart)
+    narchived = length(arch)
     new_popsize = max(alg.min_popsize, ceil(Int, alg.γ * narchived))
     # fill populations with the solutions from the archive
     resize!(alg.population, new_popsize)
     last_archived = min(narchived, new_popsize)
-    @inbounds for i in 1:last_archived
-        alg.population[i] = archive(alg).frontier[frontier_ixs[i]]
+    @inbounds for (i, front_indi) in enumerate(pareto_frontier(archive(alg)))
+        alg.population[i] = front_indi
     end
     # inject mutated archive members
     populate_by_mutants(alg, last_archived)
