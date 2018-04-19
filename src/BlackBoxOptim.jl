@@ -53,6 +53,7 @@ export  Optimizer, AskTellOptimizer, SteppingOptimizer, PopulationOptimizer,
 
         # OptimizationResults
         minimum, f_minimum, iteration_converged, parameters, population, pareto_frontier, params,
+        isinterrupted, archived_fitness,
 
         # OptController
         numruns, lastrun, problem,
