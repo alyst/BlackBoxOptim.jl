@@ -82,7 +82,7 @@ end
             schaffer1(x) = (sum(abs2, x), sum(xx -> abs2(xx - 2.0), x))
             p = BlackBoxOptim.FunctionBasedProblem(schaffer1, "Schaffer1", ParetoFitnessScheme{2}(is_minimizing=true),
                                                    symmetric_search_space(5, (-10.0, 10.0)))
-            a = EpsBoxArchive(convert(EpsBoxDominanceFitnessScheme, fitness_scheme(p)), max_size=100)
+            a = EpsBoxArchive(EpsBoxDominanceFitnessScheme(fitness_scheme(p)), max_size=100)
 
             e = BlackBoxOptim.ParallelEvaluator(p, a, pids=workers())
             fit1 = fitness([0.0, 1.0, 2.0, 3.0, 4.0], e)
