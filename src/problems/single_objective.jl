@@ -48,44 +48,45 @@ const JadeFunctionSet = Dict{Int,FunctionBasedProblemFamily}(
 A `TransformedProblem` just makes a few changes in an original problem but refers
 most func calls to it.
 
-The concrete derived types must implement a `sub_problem()` method.
+The concrete derived types must implement a `orig_problem()` method.
 """
-abstract type TransformedProblem{FS<:FitnessScheme} <: OptimizationProblem{FS} end
+abstract type TransformedProblem{FS, P <: OptimizationProblem{FS}} <: OptimizationProblem{FS} end
 
-search_space(tp::TransformedProblem) = search_space(sub_problem(tp))
-is_fixed_dimensional(tp::TransformedProblem) = is_fixed_dimensional(sub_problem(tp))
-numfuncs(tp::TransformedProblem) = numfuncs(sub_problem(tp))
-numdims(tp::TransformedProblem) = numdims(sub_problem(tp))
-fmins(tp::TransformedProblem) = fmins(sub_problem(tp))
-name(tp::TransformedProblem) = name(sub_problem(tp))
+orig_problem(tp::TransformedProblem) = tp.orig_problem # default implementation
+orig_problem_type(tp::Type{<:TransformedProblem{P}}) where P = P
+search_space(tp::TransformedProblem) = search_space(orig_problem(tp))
+is_fixed_dimensional(tp::TransformedProblem) = is_fixed_dimensional(orig_problem(tp))
+numfuncs(tp::TransformedProblem) = numfuncs(orig_problem(tp))
+numdims(tp::TransformedProblem) = numdims(orig_problem(tp))
+fmins(tp::TransformedProblem) = fmins(orig_problem(tp))
 
 """
 A `TransformedProblem` subclass that shifts the minimum value and biases the returned
 function values.
 """
-struct ShiftedAndBiasedProblem{FS<:FitnessScheme} <: TransformedProblem{FS}
+struct ShiftedAndBiasedProblem{FS, P <: OptimizationProblem} <: TransformedProblem{FS, P}
+    orig_problem::P
+
     xshift::Vector{Float64}
     funcshift::Float64
-    subp::OptimizationProblem{FS}
 
-    function ShiftedAndBiasedProblem(sub_problem::OptimizationProblem{FS};
-        xshift = false, funcshift = 0.0) where {FS <: FitnessScheme}
-        xshift = (xshift != false) ? xshift : rand_individual(search_space(sub_problem))
-        new{FS}(xshift[:], funcshift, sub_problem)
+    function ShiftedAndBiasedProblem(orig_problem::P;
+        xshift = false, funcshift = 0.0) where P <: OptimizationProblem{FS} where FS
+        xshift = (xshift != false) ? xshift : rand_individual(search_space(orig_problem))
+        new{FS, P}(xshift[:], funcshift, orig_problem)
     end
 end
 
-sub_problem(sp::ShiftedAndBiasedProblem) = sp.subp
-
-is_fixed_dimensional(p::ShiftedAndBiasedProblem) = is_fixed_dimensional(sub_problem(p))
+is_fixed_dimensional(p::ShiftedAndBiasedProblem) = is_fixed_dimensional(orig_problem(p))
+name(p::ShiftedAndBiasedProblem) = "ShiftedAndBiased("*name(orig_problem(p))*")"
 
 """
 Evaluate fitness by first shifting `x` and then biasing the returned function value.
 """
 evalfunc(x, i, sp::ShiftedAndBiasedProblem) =
-  ofunc(sub_problem(sp), i)(x - sp.xshift) + sp.funcshift
+  ofunc(orig_problem(sp), i)(x - sp.xshift) + sp.funcshift
 
-shifted(p::OptimizationProblem{FS}; funcshift = 0.0) where {FS<:FitnessScheme} =
+shifted(p::OptimizationProblem{FS}; funcshift = 0.0) where {FS<:ScalarFitnessScheme} =
     ShiftedAndBiasedProblem(p; funcshift = funcshift)
 
 
