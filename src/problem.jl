@@ -5,8 +5,7 @@ The base abstract type for all optimization problems.
 abstract type OptimizationProblem{FS<:FitnessScheme} end
 
 # common definitions for `OptimizationProblem`
-# (enforce field names of subtypes)
-name(p::OptimizationProblem) = p.name
+name(p::OptimizationProblem) = string(typeof(p))
 fitness_scheme(p::OptimizationProblem) = p.fitness_scheme
 fitness_type(p::OptimizationProblem) = fitness_type(fitness_scheme(p))
 numobjectives(p::OptimizationProblem) = numobjectives(fitness_scheme(p))
