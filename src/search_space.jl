@@ -97,14 +97,6 @@ maxs(rss::RangePerDimSearchSpace) = rss.maxs
 deltas(rss::RangePerDimSearchSpace) = rss.deltas
 numdims(rss::RangePerDimSearchSpace) = length(mins(rss))
 
-diameters(rss::RangePerDimSearchSpace) = deltas(rss)
-
-"""
-Create `RangePerDimSearchSpace` with given number of dimensions
-and given range of valid values for each dimension.
-"""
-symmetric_search_space(numdims, range=(0.0, 1.0)) = RangePerDimSearchSpace(fill(range, numdims))
-
 """
 Projects a given point onto the search space coordinate-wise.
 """
@@ -120,3 +112,68 @@ Base.vcat(ss1::RangePerDimSearchSpace, ss2::RangePerDimSearchSpace) =
 Could be used as a placeholder for optional `SearchSpace` parameters.
 """
 const ZERO_SEARCH_SPACE = RangePerDimSearchSpace(Vector{Float64}(), Vector{Float64}())
+
+"""
+`SearchSpace` defined by a range of valid values and
+the precision (number of digits) of each dimension.
+"""
+struct PrecRangePerDimSearchSpace <: SearchSpace
+    # We save the ranges as individual mins, maxs and deltas for faster access later.
+    mins::Vector{Float64}
+    maxs::Vector{Float64}
+    deltas::Vector{Float64}
+    digits::Vector{Int}
+
+    function PrecRangePerDimSearchSpace(ranges, digits::AbstractVector{<:Integer})
+        length(digits) == length(ranges) ||
+            throw(DimensionMismatch())
+        mins = getindex.(ranges, 1)
+        maxs = getindex.(ranges, 2)
+        new(mins, maxs, maxs .- mins, copy!(Vector{Int}(length(digits)), digits))
+    end
+
+    PrecRangePerDimSearchSpace(mins, maxs, digits) =
+        new(mins, maxs, maxs .- mins,
+            copy!(similar(Vector{Int}, digits), digits))
+end
+
+mins(ss::PrecRangePerDimSearchSpace) = ss.mins
+maxs(ss::PrecRangePerDimSearchSpace) = ss.maxs
+deltas(ss::PrecRangePerDimSearchSpace) = ss.deltas
+digits(ss::PrecRangePerDimSearchSpace) = ss.digits
+numdims(ss::PrecRangePerDimSearchSpace) = length(mins(ss))
+
+diameters(rss::SearchSpace) = deltas(rss)
+
+feasible(x::Real, u::Real, v::Real, digits::Integer) =
+    clamp(digits >= 0 ? round(x, digits) : x, u, v)
+
+"""
+Projects a given point onto the search space coordinate-wise.
+"""
+feasible(v::AbstractIndividual, ss::PrecRangePerDimSearchSpace) =
+    feasible.(v, mins(ss), maxs(ss), digits(ss))
+
+# concatenates two range-based search spaces
+Base.vcat(ss1::PrecRangePerDimSearchSpace, ss2::PrecRangePerDimSearchSpace) =
+    PrecRangePerDimSearchSpace(vcat(mins(ss1), mins(ss2)),
+                               vcat(maxs(ss1), maxs(ss2)),
+                               vcat(digits(ss1), digits(ss2)))
+
+function rand_individuals_lhs(ss::PrecRangePerDimSearchSpace, numIndividuals)
+   pop = Utils.latin_hypercube_sampling(mins(ss), maxs(ss), numIndividuals)
+   for i in 1:popsize(pop)
+       indi = viewer(pop, i)
+       indi .= feasible(indi, ss)
+   end
+   return pop
+end
+
+"""
+Create `RangePerDimSearchSpace` with given number of dimensions
+and given range of valid values for each dimension.
+"""
+symmetric_search_space(numdims, range=(0.0, 1.0); digits::Union{Integer, Nothing} = nothing) =
+   (digits === nothing || digits === -1) ?
+       RangePerDimSearchSpace(fill(range, numdims)) :
+       PrecRangePerDimSearchSpace(fill(range, numdims), fill(digits, numdims))

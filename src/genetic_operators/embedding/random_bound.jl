@@ -24,11 +24,20 @@ function random_bound(t::Real, r::Real, l::Real, u::Real)
     return t
 end
 
+random_bound(t::Real, r::Real, l::Real, u::Real, digits::Integer) =
+    digits < 0 ?
+        random_bound(t, r, l, u) :
+        clamp(round(random_bound(t, r, l, u), digits), l, u)
+
 function apply!(eo::RandomBound, target::AbstractIndividual, ref::AbstractIndividual)
     length(target) == length(ref) == numdims(eo.searchSpace) ||
         throw(ArgumentError("Dimensions of problem/individuals do not match"))
     ss = search_space(eo)
-    target .= random_bound.(target, ref, mins(ss), maxs(ss))
+    if ss isa PrecRangePerDimSearchSpace
+        target .= random_bound.(target, ref, mins(ss), maxs(ss), digits(ss))
+    else
+        target .= random_bound.(target, ref, mins(ss), maxs(ss))
+    end
     return target
 end
 

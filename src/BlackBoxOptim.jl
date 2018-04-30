@@ -60,7 +60,7 @@ export  Optimizer, AskTellOptimizer, SteppingOptimizer, PopulationOptimizer,
 
         # Search spaces
         ParamBounds, Individual, SearchSpace, FixedDimensionSearchSpace, ContinuousSearchSpace,
-        RangePerDimSearchSpace, symmetric_search_space,
+        RangePerDimSearchSpace, PrecRangePerDimSearchSpace, symmetric_search_space,
         numdims, mins, maxs, deltas, ranges, range_for_dim, diameters,
         rand_individual, rand_individuals, rand_individuals_lhs,
 
