@@ -4,6 +4,7 @@ end
 
 module BlackBoxOptimTests
 
+using Logging
 using LinearAlgebra, Random
 using Printf: @printf, @sprintf
 using SpatialIndexing
