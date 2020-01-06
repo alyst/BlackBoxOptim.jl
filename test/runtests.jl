@@ -11,6 +11,9 @@ using SpatialIndexing
 
 const SI = SpatialIndexing
 
+Logging.global_logger(Logging.ConsoleLogger(stderr, Logging.Debug))
+@show Logging.min_enabled_level(Logging.global_logger())
+
 TestDir = @__DIR__
 
 # If two arguments the second one if filename of a testset file
