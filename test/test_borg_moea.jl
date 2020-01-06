@@ -36,6 +36,6 @@
                          FitnessScheme=ParetoFitnessScheme{2}(is_minimizing=true),
                          SearchRange=(-10.0, 10.0), NumDimensions=2, ϵ=0.01,
                          MaxRestarts=3, MaxSteps=100000, TraceMode=:silent)
-        @test general_stop_reason(res) == "Max number of restarts (3) reached"
+        @test BlackBoxOptim.general_stop_reason(res) == "Max number of restarts (3) reached"
     end
 end
