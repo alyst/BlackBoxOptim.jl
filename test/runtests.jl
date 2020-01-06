@@ -10,7 +10,7 @@ using SpatialIndexing
 
 const SI = SpatialIndexing
 
-TestDir = first(splitdir(@__FILE__()))
+TestDir = @__DIR__
 
 # If two arguments the second one if filename of a testset file
 # listing the testfiles to use.
@@ -20,7 +20,7 @@ else
     test_file_list = joinpath(TestDir, "testset_normal.txt")
 end
 
-TestFiles = filter(fn -> isfile(joinpath(TestDir, fn)), 
+TestFiles = filter(fn -> isfile(joinpath(TestDir, fn)),
     readlines(test_file_list))
 
 function latest_changed_file(files, dir = "")
